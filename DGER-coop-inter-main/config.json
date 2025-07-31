@@ -1,0 +1,48 @@
+{
+  "grist": {
+    "base_url": "${GRIST_BASE_URL}",
+    "api_key": "${GRIST_API_KEY}",
+    "doc_id": "${GRIST_DOC_ID}"
+  },
+  "demarches": [
+    {
+      "number": 70018,
+      "name": "DGER apprenants",
+      "api_token": "${DEMARCHES_API_TOKEN_DGER_APPRENANTS}",
+      "api_url": "https://www.demarches-simplifiees.fr/api/v2/graphql",
+      "enabled": true,
+      "sync_config": {
+        "batch_size": 50,
+        "max_workers": 3,
+        "parallel": true
+      },
+      "filters": {
+        "date_depot_debut": "2025-05-01",
+        "groupes_instructeurs": ["120382"]
+      }
+    },
+    {
+      "number": 70017,
+      "name": "DGER aide",
+      "api_token": "${DEMARCHES_API_TOKEN_DGER_AIDE}",
+      "api_url": "https://www.demarches-simplifiees.fr/api/v2/graphql",
+      "enabled": true,
+      "sync_config": {
+        "batch_size": 50,
+        "max_workers": 2,
+        "parallel": true
+      },
+      "filters": {
+        "date_depot_debut": "2025-05-01",
+        "groupes_instructeurs": ["120364"]
+      }
+    }
+  ],
+  "scheduling": {
+    "default_cron": "0 02 * * *",
+    "timezone": "Europe/Paris"
+  },
+  "logging": {
+    "level": "INFO"
+  }
+}
