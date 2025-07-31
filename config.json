@@ -6,9 +6,9 @@
   },
   "demarches": [
     {
-      "number": 70018,
-      "name": "DGER apprenants",
-      "api_token": "${DEMARCHES_API_TOKEN_DGER_APPRENANTS}",
+      "number": 72259,
+      "name": "DGER personnels",
+      "api_token": "${DEMARCHES_API_TOKEN_DGER_PERSONNELS}",
       "api_url": "https://www.demarches-simplifiees.fr/api/v2/graphql",
       "enabled": true,
       "sync_config": {
@@ -17,14 +17,14 @@
         "parallel": true
       },
       "filters": {
-        "date_depot_debut": "2025-05-01",
-        "groupes_instructeurs": ["120382"]
+        "date_depot_debut": "2025-01-01",
+        "groupes_instructeurs": ["126050"]
       }
     },
-    {
-      "number": 70017,
-      "name": "DGER aide",
-      "api_token": "${DEMARCHES_API_TOKEN_DGER_AIDE}",
+     {
+      "number": 70020,
+      "name": "DGER collectif",
+      "api_token": "${DEMARCHES_API_TOKEN_DGER_COLLECTIF}",
       "api_url": "https://www.demarches-simplifiees.fr/api/v2/graphql",
       "enabled": true,
       "sync_config": {
@@ -33,13 +33,29 @@
         "parallel": true
       },
       "filters": {
-        "date_depot_debut": "2025-05-01",
-        "groupes_instructeurs": ["120364"]
+        "date_depot_debut": "2025-01-01",
+        "groupes_instructeurs": ["120400"]
+      }
+    },
+    {
+      "number": 72244,
+      "name": "DGER entrante",
+      "api_token": "${DEMARCHES_API_TOKEN_DGER_ENTRANTE}",
+      "api_url": "https://www.demarches-simplifiees.fr/api/v2/graphql",
+      "enabled": true,
+      "sync_config": {
+        "batch_size": 50,
+        "max_workers": 2,
+        "parallel": true
+      },
+      "filters": {
+        "date_depot_debut": "2025-01-01",
+        "groupes_instructeurs": ["126013"]
       }
     }
   ],
   "scheduling": {
-    "default_cron": "0 02 * * *",
+    "default_cron": "0 04 * * *",
     "timezone": "Europe/Paris"
   },
   "logging": {
