@@ -55,8 +55,9 @@ jobs:
         GRIST_DOC_ID: ${{ secrets.GRIST_DOC_ID }}
         
         # Tokens API par démarche - CORRIGÉ
-        DEMARCHES_API_TOKEN_DGER_APPRENANTS: ${{ secrets.DEMARCHES_API_TOKEN_DGER_APPRENANTS }}
-        DEMARCHES_API_TOKEN_DGER_AIDE: ${{ secrets.DEMARCHES_API_TOKEN_DGER_AIDE }}
+        DEMARCHES_API_TOKEN_DGER_PERSONNELS: ${{ secrets.DEMARCHES_API_TOKEN_DGER_PERSONNELS }}
+        DEMARCHES_API_TOKEN_DGER_COLLECTIF: ${{ secrets.DEMARCHES_API_TOKEN_DGER_COLLECTIF }}
+        DEMARCHES_API_TOKEN_DGER_ENTRANTE: ${{ secrets.DEMARCHES_API_TOKEN_DGER_ENTRANTE }}
       run: |
         echo "🔍 Validation de la configuration multi-démarche..."
         python multi_demarche_manager.py --validate-only
@@ -128,8 +129,9 @@ jobs:
         GRIST_DOC_ID: ${{ secrets.GRIST_DOC_ID }}
         
         # Tokens API par démarche
-        DEMARCHES_API_TOKEN_DGER_APPRENANTS: ${{ secrets.DEMARCHES_API_TOKEN_DGER_APPRENANTS }}
-        DEMARCHES_API_TOKEN_DGER_AIDE : ${{ secrets.DEMARCHES_API_TOKEN_DGER_AIDE }}
+        DEMARCHES_API_TOKEN_DGER_PERSONNELS: ${{ secrets.DEMARCHES_API_TOKEN_DGER_PERSONNELS }}
+        DEMARCHES_API_TOKEN_DGER_COLLECTIF : ${{ secrets.DEMARCHES_API_TOKEN_DGER_COLLECTIF }}
+        DEMARCHES_API_TOKEN_DGER_ENTRANTE : ${{ secrets.DEMARCHES_API_TOKEN_DGER_ENTRANTE }}
         
         # Paramètres d'exécution
         DEMARCHE_NUMBERS: ${{ github.event.inputs.demarche_numbers }}
