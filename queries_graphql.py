@@ -701,7 +701,7 @@ def get_demarche_dossiers_filtered(
     Utilise SEULEMENT les paramètres qui fonctionnent vraiment selon les tests.
     
     PARAMÈTRES RÉELLEMENT SUPPORTÉS :
-    [OK]createdSince: ISO8601DateTime (date de début)
+    ✅ createdSince: ISO8601DateTime (date de début)
     ❌ createdUntil: Non supporté
     ❌ groupeInstructeurNumber: Non supporté  
     ❌ states: Non supporté
@@ -715,7 +715,7 @@ def get_demarche_dossiers_filtered(
     server_filters = {}
     client_filters = {}
     
-    # [OK]FILTRE CÔTÉ SERVEUR : Date de début seulement
+    # ✅ FILTRE CÔTÉ SERVEUR : Date de début seulement
     if date_debut:
         if 'T' not in date_debut:
             date_debut += 'T00:00:00Z'
@@ -736,7 +736,7 @@ def get_demarche_dossiers_filtered(
         print(f"📋 Filtre client par statuts: {statuts}")
     
     if server_filters:
-        print(f"[FILTRAGE] Filtres côté serveur: {list(server_filters.keys())}")
+        print(f"🔍 Filtres côté serveur: {list(server_filters.keys())}")
     if client_filters:
         print(f"💻 Filtres côté client: {list(client_filters.keys())}")
     
@@ -829,7 +829,7 @@ def get_demarche_dossiers_filtered(
     """
     
     # Exécution de la requête
-    print(f"[RECHERCHE] Exécution requête avec filtres serveur supportés...")
+    print(f"🚀 Exécution requête avec filtres serveur supportés...")
     
     response = requests.post(
         API_URL,
@@ -852,7 +852,7 @@ def get_demarche_dossiers_filtered(
     if "dossiers" in demarche_data and "nodes" in demarche_data["dossiers"]:
         dossiers = demarche_data["dossiers"]["nodes"]
         total_dossiers = len(dossiers)
-        print(f"[OK]Première page récupérée: {total_dossiers} dossiers")
+        print(f"✅ Première page récupérée: {total_dossiers} dossiers")
         
         # Pagination
         has_next_page = demarche_data["dossiers"]["pageInfo"]["hasNextPage"]
@@ -884,24 +884,24 @@ def get_demarche_dossiers_filtered(
                 new_dossiers = next_demarche["dossiers"]["nodes"]
                 dossiers.extend(new_dossiers)
                 total_dossiers += len(new_dossiers)
-                print(f"[OK]Page {page_num}: +{len(new_dossiers)} (total: {total_dossiers})")
+                print(f"✅ Page {page_num}: +{len(new_dossiers)} (total: {total_dossiers})")
                 
                 has_next_page = next_demarche["dossiers"]["pageInfo"]["hasNextPage"]
                 cursor = next_demarche["dossiers"]["pageInfo"]["endCursor"]
             else:
                 has_next_page = False
     
-    print(f"[SUCCES] Récupération côté serveur: {len(dossiers)} dossiers")
+    print(f"🎉 Récupération côté serveur: {len(dossiers)} dossiers")
     
     # ===========================================
     # FILTRAGE CÔTÉ CLIENT pour les autres critères
     # ===========================================
     
     if not client_filters:
-        print(f"[OK]Aucun filtre côté client - résultat final: {len(dossiers)} dossiers")
+        print(f"✅ Aucun filtre côté client - résultat final: {len(dossiers)} dossiers")
         return dossiers
     
-    print(f"[FILTRAGE] Application des filtres côté client...")
+    print(f"🔍 Application des filtres côté client...")
     dossiers_avant = len(dossiers)
     filtered_dossiers = []
     
@@ -946,7 +946,7 @@ def get_demarche_dossiers_filtered(
         # Si tous les filtres passent, garder le dossier
         filtered_dossiers.append(dossier)
     
-    print(f"[OK]Filtrage côté client terminé: {len(filtered_dossiers)}/{dossiers_avant} dossiers conservés")
+    print(f"✅ Filtrage côté client terminé: {len(filtered_dossiers)}/{dossiers_avant} dossiers conservés")
     
     # Debug : Afficher quelques exemples
     if filtered_dossiers:
@@ -1017,7 +1017,7 @@ def test_working_filter():
             print(f"❌ Erreurs: {result['errors']}")
         else:
             dossiers = result["data"]["demarche"]["dossiers"]["nodes"]
-            print(f"[OK]SUCCESS! {len(dossiers)} dossiers après 2025-06-15")
+            print(f"✅ SUCCESS! {len(dossiers)} dossiers après 2025-06-15")
             
             for dossier in dossiers:
                 groupe = dossier['groupeInstructeur']
@@ -1035,9 +1035,9 @@ if __name__ == "__main__":
 # ================================================
 
 """
-[FILTRAGE] PARAMÈTRES GRAPHQL RÉELLEMENT SUPPORTÉS (testé) :
+🔍 PARAMÈTRES GRAPHQL RÉELLEMENT SUPPORTÉS (testé) :
 
-[OK]CÔTÉ SERVEUR :
+✅ CÔTÉ SERVEUR :
 - createdSince: ISO8601DateTime  # Date de début uniquement
 
 ❌ NON SUPPORTÉS côté serveur :
