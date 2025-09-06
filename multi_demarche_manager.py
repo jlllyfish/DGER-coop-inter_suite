@@ -438,37 +438,100 @@ def main():
     manager.sync_config.batch_size = args.batch_size
     manager.sync_config.max_workers = args.max_workers
     
+    # Activer le debug si demandé
+    if args.debug:
+        import os
+        os.environ['LOG_LEVEL'] = 'DEBUG'
+        print("🐛 Mode debug activé")
+    
     try:
-        if args.demarches:
-            # Synchronisation de démarches spécifiques
-            demarche_numbers = [int(x.strip()) for x in args.demarches.split(',') if x.strip()]
-            print(f"🎯 Démarches sélectionnées : {demarche_numbers}")
+        # Vérifier que le fichier de configuration existe
+        if not os.path.exists(args.config):
+            print(f"❌ Fichier de configuration non trouvé : {args.config}")
+            print(f"💡 Créez le fichier {args.config} avec vos démarches")
+            return 1
+        
+        print(f"✅ Configuration chargée : {len(manager.config.get('demarches', []))} démarches trouvées")
+        
+        # Gestion des commandes compatibles avec l'ancien système
+        if args.validate_only or args.dry_run:
+            print("🔍 Validation de la configuration...")
+            try:
+                # Test de validation simple
+                enabled_demarches = [d for d in manager.config.get('demarches', []) if d.get('enabled', True)]
+                if enabled_demarches:
+                    print(f"✅ Configuration valide : {len(enabled_demarches)} démarches activées")
+                    return 0
+                else:
+                    print("❌ Aucune démarche activée trouvée")
+                    return 1
+            except Exception as e:
+                print(f"❌ Configuration invalide : {e}")
+                return 1
+        
+        elif args.sync_all:
+            print("🔄 Synchronisation de toutes les démarches (optimisé)...")
+            results = manager.sync_all_optimized()
+            
+        elif args.sync:
+            # Compatibilité avec --sync NUMERO
+            demarche_numbers = [int(args.sync.strip())]
+            print(f"🎯 Synchronisation de la démarche : {demarche_numbers[0]}")
             
             # Filtrer les démarches à traiter
             all_demarches = manager.config.get('demarches', [])
             specific_demarches = [d for d in all_demarches if d['number'] in demarche_numbers]
             
+            if not specific_demarches:
+                print(f"❌ Démarche {demarche_numbers[0]} non trouvée dans la configuration")
+                return 1
+            
             results = []
             for demarche_config in specific_demarches:
                 result = manager.sync_demarche_optimized(demarche_config)
                 results.append(result)
+        
+        elif args.demarches:
+            # Synchronisation de démarches spécifiques (nouvelle syntaxe)
+            try:
+                demarche_numbers = [int(x.strip()) for x in args.demarches.split(',') if x.strip()]
+                print(f"🎯 Démarches sélectionnées : {demarche_numbers}")
+                
+                # Filtrer les démarches à traiter
+                all_demarches = manager.config.get('demarches', [])
+                specific_demarches = [d for d in all_demarches if d['number'] in demarche_numbers]
+                
+                results = []
+                for demarche_config in specific_demarches:
+                    result = manager.sync_demarche_optimized(demarche_config)
+                    results.append(result)
+            except ValueError as e:
+                print(f"❌ Erreur dans les numéros de démarches : {args.demarches}")
+                return 1
         else:
-            # Synchronisation de toutes les démarches
+            # Par défaut, synchroniser toutes les démarches
+            print("🚀 Synchronisation de toutes les démarches (aucune option spécifiée)")
             results = manager.sync_all_optimized()
         
         # Vérifier le succès
-        success_count = sum(1 for r in results if r.success)
-        if success_count > 0:
-            print(f"\n🎉 Synchronisation terminée : {success_count} démarches traitées avec succès")
-            return 0
+        if 'results' in locals():
+            success_count = sum(1 for r in results if r.success)
+            if success_count > 0:
+                print(f"\n🎉 Synchronisation terminée : {success_count} démarches traitées avec succès")
+                return 0
+            else:
+                print("\n💥 Aucune synchronisation réussie")
+                return 1
         else:
-            print("\n💥 Aucune synchronisation réussie")
-            return 1
+            return 0
             
     except Exception as e:
         print(f"💥 Erreur fatale : {e}")
-        import traceback
-        traceback.print_exc()
+        if args.debug:
+            import traceback
+            traceback.print_exc()
+        else:
+            print("💡 Utilisez --debug pour plus de détails")
         return 1
 
 if __name__ == "__main__":
