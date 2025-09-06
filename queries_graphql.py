@@ -1,115 +1,640 @@
-"""
-Module d'utilitaires pour récupérer et traiter le schéma complet d'une démarche
-à partir de l'API Démarches Simplifiées, pour la création correcte de tables Grist.
-"""
-
 import requests
 import json
-from typing import Dict, List, Any, Tuple, Optional, Set
-
-# Importer les configurations nécessaires
+from typing import Dict, Any, List, Optional
 from queries_config import API_TOKEN, API_URL
-# SUPPRESSION DE LA LIGNE PROBLÉMATIQUE :
-# from grist_processor_working_all import normalize_column_name, log, log_verbose, log_error
 
-def get_demarche_schema(demarche_number):
+# Requêtes GraphQL (fragmentées en quelques constantes)
+# Pour les fragments communs
+COMMON_FRAGMENTS = """
+fragment PersonneMoraleFragment on PersonneMorale {
+    siret
+    siegeSocial
+    naf
+    libelleNaf
+    address {
+        ...AddressFragment
+    }
+    entreprise {
+        siren
+        raisonSociale
+        nomCommercial
+    }
+}
+
+fragment PersonneMoraleIncompleteFragment on PersonneMoraleIncomplete {
+    siret
+}
+
+fragment PersonnePhysiqueFragment on PersonnePhysique {
+    civilite
+    nom
+    prenom
+    email
+}
+
+fragment AddressFragment on Address {
+    label
+    type
+    streetAddress
+    postalCode
+    cityName
+}
+
+fragment FileFragment on File {
+    __typename
+    filename
+    contentType
+    checksum
+    byteSize: byteSizeBigInt
+    url
+    createdAt
+}
+
+fragment GeoAreaFragment on GeoArea {
+    id
+    source
+    description
+    geometry @include(if: $includeGeometry) {
+        type
+        coordinates
+    }
+    ... on ParcelleCadastrale {
+        commune
+        numero
+        section
+        prefixe
+        surface
+    }
+}
+"""
+
+# Pour les types spécialisés
+SPECIALIZED_FRAGMENTS = """
+fragment PaysFragment on Pays {
+    name
+    code
+}
+
+fragment RegionFragment on Region {
+    name
+    code
+}
+
+fragment DepartementFragment on Departement {
+    name
+    code
+}
+
+fragment EpciFragment on Epci {
+    name
+    code
+}
+
+fragment CommuneFragment on Commune {
+    name
+    code
+    postalCode
+}
+
+fragment RNFFragment on RNF {
+    id
+    title
+    address {
+        ...AddressFragment
+    }
+}
+
+fragment EngagementJuridiqueFragment on EngagementJuridique {
+    montantEngage
+    montantPaye
+}
+"""
+
+# Pour les champs
+CHAMP_FRAGMENTS = """
+fragment RootChampFragment on Champ {
+    ... on RepetitionChamp {
+        rows {
+            id
+            champs {
+                ...ChampFragment
+                ... on CarteChamp {
+                    geoAreas {
+                        ...GeoAreaFragment
+                    }
+                }
+                ... on DossierLinkChamp {
+                    dossier {
+                        id
+                        number
+                        state
+                    }
+                }
+            }
+        }
+    }
+    ... on CarteChamp {
+        geoAreas {
+            ...GeoAreaFragment
+        }
+    }
+    ... on DossierLinkChamp {
+        dossier {
+            id
+            number
+            state
+        }
+    }
+}
+
+fragment ChampFragment on Champ {
+    id
+    champDescriptorId
+    __typename
+    label
+    stringValue
+    updatedAt
+    prefilled
+    ... on DateChamp {
+        date
+    }
+    ... on DatetimeChamp {
+        datetime
+    }
+    ... on CheckboxChamp {
+        checked: value
+    }
+    ... on YesNoChamp {
+        selected: value
+    }
+    ... on DecimalNumberChamp {
+        decimalNumber: value
+    }
+    ... on IntegerNumberChamp {
+        integerNumber: value
+    }
+    ... on CiviliteChamp {
+        civilite: value
+    }
+    ... on LinkedDropDownListChamp {
+        primaryValue
+        secondaryValue
+    }
+    ... on MultipleDropDownListChamp {
+        values
+    }
+    ... on PieceJustificativeChamp {
+        files {
+            ...FileFragment
+        }
+    }
+    ... on AddressChamp {
+        address {
+            ...AddressFragment
+        }
+        commune {
+            ...CommuneFragment
+        }
+        departement {
+            ...DepartementFragment
+        }
+    }
+    ... on EpciChamp {
+        epci {
+            ...EpciFragment
+        }
+        departement {
+            ...DepartementFragment
+        }
+    }
+    ... on CommuneChamp {
+        commune {
+            ...CommuneFragment
+        }
+        departement {
+            ...DepartementFragment
+        }
+    }
+    ... on DepartementChamp {
+        departement {
+            ...DepartementFragment
+        }
+    }
+    ... on RegionChamp {
+        region {
+            ...RegionFragment
+        }
+    }
+    ... on PaysChamp {
+        pays {
+            ...PaysFragment
+        }
+    }
+    ... on SiretChamp {
+        etablissement {
+            ...PersonneMoraleFragment
+        }
+    }
+    ... on RNFChamp {
+        rnf {
+            ...RNFFragment
+        }
+        commune {
+            ...CommuneFragment
+        }
+        departement {
+            ...DepartementFragment
+        }
+    }
+    ... on EngagementJuridiqueChamp {
+        engagementJuridique {
+            ...EngagementJuridiqueFragment
+        }
+    }
+}
+"""
+
+# Requête pour un dossier spécifique
+query_get_dossier = """
+query getDossier(
+    $dossierNumber: Int!
+    $includeChamps: Boolean = true
+    $includeAnotations: Boolean = true
+    $includeGeometry: Boolean = true
+    $includeTraitements: Boolean = true
+    $includeInstructeurs: Boolean = true
+) {
+    dossier(number: $dossierNumber) {
+        ...DossierFragment
+        demarche {
+            ...DemarcheDescriptorFragment
+        }
+    }
+}
+
+fragment DemarcheDescriptorFragment on DemarcheDescriptor {
+    id
+    number
+    title
+    description
+    state
+    declarative
+    dateCreation
+    datePublication
+    dateDerniereModification
+    dateDepublication
+    dateFermeture
+}
+
+fragment DossierFragment on Dossier {
+    __typename
+    id
+    number
+    archived
+    prefilled
+    state
+    dateDerniereModification
+    dateDepot
+    datePassageEnConstruction
+    datePassageEnInstruction
+    dateTraitement
+    dateExpiration
+    dateSuppressionParUsager
+    dateDerniereModificationChamps
+    dateDerniereModificationAnnotations
+    motivation
+    usager {
+        email
+    }
+    prenomMandataire
+    nomMandataire
+    deposeParUnTiers
+    connectionUsager
+    groupeInstructeur {
+        id
+        number
+        label
+    }
+    demandeur {
+        __typename
+        ...PersonnePhysiqueFragment
+        ...PersonneMoraleFragment
+        ...PersonneMoraleIncompleteFragment
+    }
+    instructeurs @include(if: $includeInstructeurs) {
+        id
+        email
+    }
+    traitements @include(if: $includeTraitements) {
+        state
+        emailAgentTraitant
+        dateTraitement
+        motivation
+    }
+    champs @include(if: $includeChamps) {
+        ...ChampFragment
+        ...RootChampFragment
+    }
+    annotations @include(if: $includeAnotations) {
+        ...ChampFragment
+        ...RootChampFragment
+    }
+}
+
+""" + COMMON_FRAGMENTS + SPECIALIZED_FRAGMENTS + CHAMP_FRAGMENTS
+
+# Requête pour une démarche OPTIMISÉE avec filtres côté serveur
+query_get_demarche = """
+query getDemarche(
+    $demarcheNumber: Int!
+    $includeChamps: Boolean = true
+    $includeAnotations: Boolean = true
+    $includeRevision: Boolean = true
+    $includeDossiers: Boolean = true
+    $includeGeometry: Boolean = true
+    $includeTraitements: Boolean = true
+    $includeInstructeurs: Boolean = true
+    $afterCursor: String = null
+    $createdSince: ISO8601DateTime = null
+    $createdUntil: ISO8601DateTime = null
+    $instructeurs: [ID!] = null
+    $states: [DossierState!] = null
+) {
+    demarche(number: $demarcheNumber) {
+        id
+        number
+        title
+        state
+        declarative
+        dateCreation
+        dateFermeture
+        activeRevision @include(if: $includeRevision) {
+            ...RevisionFragment
+        }
+        dossiers(
+            first: 100
+            after: $afterCursor
+            createdSince: $createdSince
+            createdUntil: $createdUntil
+            instructeurs: $instructeurs
+            states: $states
+        ) @include(if: $includeDossiers) {
+            pageInfo {
+                ...PageInfoFragment
+            }
+            nodes {
+                ...DossierFragment
+            }
+        }
+    }
+}
+
+fragment PageInfoFragment on PageInfo {
+    hasPreviousPage
+    hasNextPage
+    startCursor
+    endCursor
+}
+
+fragment RevisionFragment on Revision {
+    id
+    datePublication
+    champDescriptors {
+        ...ChampDescriptorFragment
+        ... on RepetitionChampDescriptor {
+            champDescriptors {
+                ...ChampDescriptorFragment
+            }
+        }
+    }
+    annotationDescriptors {
+        ...ChampDescriptorFragment
+        ... on RepetitionChampDescriptor {
+            champDescriptors {
+                ...ChampDescriptorFragment
+            }
+        }
+    }
+}
+
+fragment ChampDescriptorFragment on ChampDescriptor {
+    __typename
+    id
+    label
+    description
+    required
+    ... on DropDownListChampDescriptor {
+        options
+        otherOption
+    }
+    ... on MultipleDropDownListChampDescriptor {
+        options
+    }
+    ... on LinkedDropDownListChampDescriptor {
+        options
+    }
+    ... on PieceJustificativeChampDescriptor {
+        fileTemplate {
+            ...FileFragment
+        }
+    }
+    ... on ExplicationChampDescriptor {
+        collapsibleExplanationEnabled
+        collapsibleExplanationText
+    }
+}
+
+fragment DossierFragment on Dossier {
+    __typename
+    id
+    number
+    archived
+    prefilled
+    state
+    dateDerniereModification
+    dateDepot
+    datePassageEnConstruction
+    datePassageEnInstruction
+    dateTraitement
+    usager {
+        email
+    }
+    groupeInstructeur {
+        id
+        number
+        label
+    }
+    demandeur {
+        __typename
+        ...PersonnePhysiqueFragment
+        ...PersonneMoraleFragment
+        ...PersonneMoraleIncompleteFragment
+    }
+    instructeurs @include(if: $includeInstructeurs) {
+        id
+        email
+    }
+    traitements @include(if: $includeTraitements) {
+        state
+        emailAgentTraitant
+        dateTraitement
+        motivation
+    }
+    champs @include(if: $includeChamps) {
+        ...ChampFragment
+        ...RootChampFragment
+    }
+    annotations @include(if: $includeAnotations) {
+        ...ChampFragment
+        ...RootChampFragment
+    }
+    labels {
+        id 
+        name
+        color
+    }    
+}
+
+""" + COMMON_FRAGMENTS + SPECIALIZED_FRAGMENTS + CHAMP_FRAGMENTS
+
+# Fonctions d'API
+def get_dossier(dossier_number: int) -> Dict[str, Any]:
     """
-    Récupère le schéma complet d'une démarche avec tous ses descripteurs de champs,
-    sans dépendre des dossiers existants.
-    
-    Args:
-        demarche_number: Numéro de la démarche
-        
-    Returns:
-        dict: Structure complète des descripteurs de champs et d'annotations
+    Récupère les détails d'un dossier avec tous ses champs.
+    Filtre les champs HeaderSectionChamp et ExplicationChamp.
+    Ignore les erreurs de permission.
     """
     if not API_TOKEN:
         raise ValueError("Le token d'API n'est pas configuré. Définissez DEMARCHES_API_TOKEN dans le fichier .env")
     
-    # Requête GraphQL spécifique pour récupérer les descripteurs de champs
-    query = """
-    query getDemarcheSchema($demarcheNumber: Int!) {
-        demarche(number: $demarcheNumber) {
-            id
-            number
-            title
-            activeRevision {
-                id
-                champDescriptors {
-                    ...ChampDescriptorFragment
-                    ... on RepetitionChampDescriptor {
-                        champDescriptors {
-                            ...ChampDescriptorFragment
-                        }
-                    }
-                }
-                annotationDescriptors {
-                    ...ChampDescriptorFragment
-                    ... on RepetitionChampDescriptor {
-                        champDescriptors {
-                            ...ChampDescriptorFragment
-                        }
-                    }
-                }
-            }
-        }
+    # Variables pour la requête
+    variables = {
+        "dossierNumber": dossier_number,
+        "includeChamps": True,
+        "includeAnotations": True,
+        "includeGeometry": True,
+        "includeTraitements": True,
+        "includeInstructeurs": True,
     }
     
-    fragment ChampDescriptorFragment on ChampDescriptor {
-        __typename
-        id
-        type
-        label
-        description
-        required
-        ... on DropDownListChampDescriptor {
-            options
-            otherOption
-        }
-        ... on MultipleDropDownListChampDescriptor {
-            options
-        }
-        ... on LinkedDropDownListChampDescriptor {
-            options
-        }
-        ... on PieceJustificativeChampDescriptor {
-            fileTemplate {
-                filename
-            }
-        }
-        ... on ExplicationChampDescriptor {
-            collapsibleExplanationEnabled
-            collapsibleExplanationText
-        }
+    # En-têtes pour la requête
+    headers = {
+        "Authorization": f"Bearer {API_TOKEN}",
+        "Content-Type": "application/json"
     }
+    
+    # Exécution de la requête
+    response = requests.post(
+        API_URL,
+        json={"query": query_get_dossier, "variables": variables},
+        headers=headers
+    )
+    
+    # Vérification du code de statut
+    response.raise_for_status()
+    
+    # Analyse de la réponse JSON
+    result = response.json()
+    
+    # Vérifier les erreurs mais ne pas s'arrêter pour les erreurs de permission
+    if "errors" in result:
+        # Séparer les erreurs de permission des autres erreurs
+        permission_errors = []
+        other_errors = []
+        
+        for error in result["errors"]:
+            error_message = error.get("message", "Unknown error")
+            if "permissions" in error_message:
+                permission_errors.append(error_message)
+            else:
+                other_errors.append(error_message)
+        
+        # Signaler les erreurs de permission mais continuer
+        if permission_errors:
+            print(f"Attention: Le dossier {dossier_number} a {len(permission_errors)} erreurs de permission")
+        
+        # S'arrêter uniquement pour les autres types d'erreurs
+        if other_errors:
+            raise Exception(f"GraphQL errors: {', '.join(other_errors)}")
+    
+    # Si les données sont nulles ou si le dossier est null à cause des permissions, retournez un dictionnaire vide
+    if not result.get("data") or not result["data"].get("dossier"):
+        print(f"Attention: Le dossier {dossier_number} n'est pas accessible ou n'existe pas")
+        return {}
+    
+    dossier = result["data"]["dossier"]
+    
+    # Filtrer les champs indésirables
+    filtered_dossier = dossier.copy()
+    
+    # Filtrer les champs
+    if "champs" in filtered_dossier:
+        filtered_dossier["champs"] = [
+            champ for champ in filtered_dossier["champs"] 
+            if champ.get("__typename") not in ["HeaderSectionChamp", "ExplicationChamp"]
+        ]
+    
+    # Filtrer les annotations
+    if "annotations" in filtered_dossier:
+        filtered_dossier["annotations"] = [
+            annotation for annotation in filtered_dossier["annotations"] 
+            if annotation.get("__typename") not in ["HeaderSectionChamp", "ExplicationChamp"]
+        ]
+    
+    return filtered_dossier
+
+def get_demarche(demarche_number: int) -> Dict[str, Any]:
     """
+    Récupère les détails d'une démarche avec tous ses dossiers accessibles.
+    Ignore les erreurs de permission sur certains dossiers ou champs.
+    """
+    if not API_TOKEN:
+        raise ValueError("Le token d'API n'est pas configuré. Définissez DEMARCHES_API_TOKEN dans le fichier .env")
+    
+    # Variables pour la requête
+    variables = {
+        "demarcheNumber": demarche_number,
+        "includeChamps": True,
+        "includeAnotations": True,
+        "includeRevision": True,
+        "includeDossiers": True,
+        "includeGeometry": True,
+        "includeTraitements": True,
+        "includeInstructeurs": True,
+    }
     
     headers = {
         "Authorization": f"Bearer {API_TOKEN}",
         "Content-Type": "application/json"
     }
     
-    # Exécuter la requête
     response = requests.post(
         API_URL,
-        json={"query": query, "variables": {"demarcheNumber": int(demarche_number)}},
+        json={"query": query_get_demarche, "variables": variables},
         headers=headers
     )
     
-    # Vérifier le code de statut
     response.raise_for_status()
-    
-    # Analyser la réponse JSON
     result = response.json()
     
-    # Vérifier les erreurs
+    # Ignorer les erreurs spécifiques liées aux permissions
     if "errors" in result:
+        # Filtrer les erreurs pour ne conserver que celles qui ne sont pas liées aux permissions
         filtered_errors = []
+        permission_errors_count = 0
+        
         for error in result["errors"]:
             error_message = error.get("message", "")
-            if "permissions" not in error_message and "hidden due to permissions" not in error_message:
+            if "permissions" in error_message or "hidden due to permissions" in error_message:
+                permission_errors_count += 1
+            else:
                 filtered_errors.append(error_message)
         
+        # Afficher le nombre d'erreurs de permission, mais continuer le traitement
+        if permission_errors_count > 0:
+            print(f"Attention: {permission_errors_count} objets masqués en raison de restrictions de permissions")
+        
+        # Ne lever une exception que pour les erreurs non liées aux permissions
         if filtered_errors:
             raise Exception(f"GraphQL errors: {', '.join(filtered_errors)}")
     
@@ -119,447 +644,443 @@ def get_demarche_schema(demarche_number):
     
     demarche = result["data"]["demarche"]
     
-    # Vérifier que activeRevision existe
-    if not demarche.get("activeRevision"):
-        raise Exception(f"Aucune révision active trouvée pour la démarche {demarche_number}")
+    # Filtrer les descripteurs de champs dans la révision active
+    if "activeRevision" in demarche and demarche["activeRevision"]:
+        active_revision = demarche["activeRevision"]
+        
+        # Filtrer les descripteurs de champs
+        if "champDescriptors" in active_revision:
+            active_revision["champDescriptors"] = [
+                descriptor for descriptor in active_revision["champDescriptors"]
+                if descriptor.get("type") not in ["HeaderSectionChamp", "ExplicationChamp"]
+            ]
+        
+        # Filtrer les descripteurs d'annotations
+        if "annotationDescriptors" in active_revision:
+            active_revision["annotationDescriptors"] = [
+                descriptor for descriptor in active_revision["annotationDescriptors"]
+                if descriptor.get("type") not in ["HeaderSectionChamp", "ExplicationChamp"]
+            ]
+    
+    # S'assurer que les structures de dossiers existent, même si vides
+    if "dossiers" not in demarche:
+        demarche["dossiers"] = {"nodes": []}
+    elif not demarche["dossiers"] or "nodes" not in demarche["dossiers"]:
+        demarche["dossiers"]["nodes"] = []
+    
+    # Filtrer les champs problématiques dans les dossiers
+    for dossier in demarche["dossiers"]["nodes"]:
+        # Filtrer les champs de chaque dossier
+        if "champs" in dossier:
+            dossier["champs"] = [
+                champ for champ in dossier["champs"]
+                if champ.get("__typename") not in ["HeaderSectionChamp", "ExplicationChamp"]
+            ]
+        
+        # Filtrer les annotations de chaque dossier
+        if "annotations" in dossier:
+            dossier["annotations"] = [
+                annotation for annotation in dossier["annotations"]
+                if annotation.get("__typename") not in ["HeaderSectionChamp", "ExplicationChamp"]
+            ]
+    
+    dossier_count = len(demarche["dossiers"]["nodes"])
+    print(f"Démarche récupérée avec succès: {dossier_count} dossiers accessibles")
     
     return demarche
 
-def get_problematic_descriptor_ids_from_schema(demarche_schema):
+def get_demarche_dossiers_filtered(
+    demarche_number: int, 
+    date_debut: str = None, 
+    date_fin: str = None,
+    groupes_instructeurs: List[str] = None,
+    statuts: List[str] = None
+) -> List[Dict[str, Any]]:
     """
-    Extrait les IDs des descripteurs problématiques (HeaderSection, Explication)
-    directement depuis le schéma de la démarche.
+    Récupère les dossiers avec filtrage côté serveur RÉEL.
+    Utilise SEULEMENT les paramètres qui fonctionnent vraiment selon les tests.
     
-    Args:
-        demarche_schema: Schéma de la démarche récupéré via get_demarche_schema
-        
-    Returns:
-        set: Ensemble des IDs problématiques à filtrer
+    PARAMÈTRES RÉELLEMENT SUPPORTÉS :
+    ✅ createdSince: ISO8601DateTime (date de début)
+    ❌ createdUntil: Non supporté
+    ❌ groupeInstructeurNumber: Non supporté  
+    ❌ states: Non supporté
+    
+    Les autres filtres seront appliqués côté client sur le résultat réduit.
     """
-    problematic_ids = set()
+    if not API_TOKEN:
+        raise ValueError("Le token d'API n'est pas configuré.")
     
-    # Fonction récursive pour explorer les descripteurs
-    def explore_descriptors(descriptors):
-        for descriptor in descriptors:
-            if descriptor.get("__typename") in ["HeaderSectionChampDescriptor", "ExplicationChampDescriptor"] or \
-               descriptor.get("type") in ["header_section", "explication"]:
-                problematic_ids.add(descriptor.get("id"))
-            
-            # Explorer les descripteurs dans les blocs répétables
-            if descriptor.get("__typename") == "RepetitionChampDescriptor" and "champDescriptors" in descriptor:
-                explore_descriptors(descriptor["champDescriptors"])
+    # Seuls les filtres côté serveur qui fonctionnent
+    server_filters = {}
+    client_filters = {}
     
-    # Explorer les descripteurs de champs et d'annotations
-    if demarche_schema.get("activeRevision"):
-        if "champDescriptors" in demarche_schema["activeRevision"]:
-            explore_descriptors(demarche_schema["activeRevision"]["champDescriptors"])
-        
-        if "annotationDescriptors" in demarche_schema["activeRevision"]:
-            explore_descriptors(demarche_schema["activeRevision"]["annotationDescriptors"])
+    # ✅ FILTRE CÔTÉ SERVEUR : Date de début seulement
+    if date_debut:
+        if 'T' not in date_debut:
+            date_debut += 'T00:00:00Z'
+        server_filters['createdSince'] = date_debut
+        print(f"🗓️ Filtre serveur par date de début: {date_debut}")
     
-    return problematic_ids
-
-def create_columns_from_schema(demarche_schema):
-    """
-    Crée les définitions de colonnes à partir du schéma de la démarche,
-    en filtrant les champs problématiques (HeaderSection, Explication)
+    # ❌ FILTRES CÔTÉ CLIENT : Tout le reste
+    if date_fin:
+        client_filters['date_fin'] = date_fin
+        print(f"🗓️ Filtre client par date de fin: {date_fin}")
     
-    Args:
-        demarche_schema: Schéma de la démarche récupéré via get_demarche_schema
-        
-    Returns:
-        dict: Définitions des colonnes pour toutes les tables
-    """
-    # IMPORT LOCAL pour éviter la dépendance circulaire
-    from grist_processor_working_all import normalize_column_name, log, log_verbose, log_error
+    if groupes_instructeurs:
+        client_filters['groupes_instructeurs'] = groupes_instructeurs
+        print(f"👥 Filtre client par groupes: {groupes_instructeurs}")
     
-    # Récupérer les IDs des descripteurs problématiques à filtrer
-    problematic_ids = get_problematic_descriptor_ids_from_schema(demarche_schema)
-    log(f"Identificateurs de {len(problematic_ids)} descripteurs problématiques à filtrer")
+    if statuts:
+        client_filters['statuts'] = statuts
+        print(f"📋 Filtre client par statuts: {statuts}")
     
-    # Colonnes fixes pour la table des dossiers
-    dossier_columns = [
-        {"id": "dossier_id", "type": "Text"},
-        {"id": "number", "type": "Int"},
-        {"id": "state", "type": "Text"},
-        {"id": "date_depot", "type": "DateTime"},
-        {"id": "date_derniere_modification", "type": "DateTime"},
-        {"id": "date_traitement", "type": "DateTime"},
-        {"id": "demandeur_type", "type": "Text"},
-        {"id": "demandeur_civilite", "type": "Text"},  # COLONNE AJOUTÉE
-        {"id": "demandeur_nom", "type": "Text"},
-        {"id": "demandeur_prenom", "type": "Text"},
-        {"id": "demandeur_email", "type": "Text"},
-        {"id": "demandeur_siret", "type": "Text"},
-        {"id": "entreprise_raison_sociale", "type": "Text"},
-        {"id": "usager_email", "type": "Text"},
-        {"id": "groupe_instructeur_id", "type": "Text"},
-        {"id": "groupe_instructeur_number", "type": "Int"},
-        {"id": "groupe_instructeur_label", "type": "Text"},
-        {"id": "supprime_par_usager", "type": "Bool"},
-        {"id": "date_suppression", "type": "DateTime"},
-        {"id": "prenom_mandataire", "type": "Text"},
-        {"id": "nom_mandataire", "type": "Text"},
-        {"id": "depose_par_un_tiers", "type": "Bool"},
-        {"id": "label_names", "type": "Text"},
-        {"id": "labels_json", "type": "Text"}
-    ]
-
-    # Colonnes de base pour la table des champs
-    champ_columns = [
-        {"id": "dossier_number", "type": "Int"},
-        {"id": "champ_id", "type": "Text"},
-    ]
+    if server_filters:
+        print(f"🔍 Filtres côté serveur: {list(server_filters.keys())}")
+    if client_filters:
+        print(f"💻 Filtres côté client: {list(client_filters.keys())}")
     
-    # Colonnes de base pour la table des annotations
-    annotation_columns = [
-        {"id": "dossier_number", "type": "Int"},
-    ]
-    
-    # Colonnes de base pour la table des blocs répétables
-    repetable_columns = [
-        {"id": "dossier_number", "type": "Int"},
-        {"id": "block_label", "type": "Text"},
-        {"id": "block_row_index", "type": "Int"},
-        {"id": "block_row_id", "type": "Text"},
-        {"id": "field_name", "type": "Text"}  # Pour les champs cartographiques
-    ]
-
-    # Variables pour suivre la présence de blocs répétables et champs carto
-    has_repetable_blocks = False
-    has_carto_fields = False
-
-    # Fonction pour déterminer le type de colonne Grist à partir du type de champ DS
-    def determine_column_type(champ_type, typename=None):
-        if champ_type in ["date", "datetime"] or typename in ["DateChamp", "DatetimeChamp"]:
-            return "DateTime"
-        elif champ_type == "decimal_number" or typename == "DecimalNumberChamp":
-            return "Numeric"
-        elif champ_type == "integer_number" or typename == "IntegerNumberChamp":
-            return "Int"
-        elif champ_type in ["checkbox", "yes_no"] or typename in ["CheckboxChamp", "YesNoChamp"]:
-            return "Bool"
-        else:
-            return "Text"
-
-    # Traiter les descripteurs de champs
-    if demarche_schema.get("activeRevision") and demarche_schema["activeRevision"].get("champDescriptors"):
-        for descriptor in demarche_schema["activeRevision"]["champDescriptors"]:
-            # Ignorer les descripteurs problématiques
-            if descriptor["__typename"] in ["HeaderSectionChampDescriptor", "ExplicationChampDescriptor"] or \
-               descriptor.get("type") in ["header_section", "explication"] or \
-               descriptor.get("id") in problematic_ids:
-                continue
-                
-            champ_type = descriptor.get("type")
-            champ_label = descriptor.get("label")
-            
-            # Détecter les blocs répétables
-            if descriptor["__typename"] == "RepetitionChampDescriptor":
-                has_repetable_blocks = True
-                
-                # Traiter les champs à l'intérieur des blocs répétables
-                for inner_descriptor in descriptor.get("champDescriptors", []):
-                    if inner_descriptor["__typename"] in ["HeaderSectionChampDescriptor", "ExplicationChampDescriptor"] or \
-                       inner_descriptor.get("type") in ["header_section", "explication"] or \
-                       inner_descriptor.get("id") in problematic_ids:
-                        continue
-                    
-                    inner_type = inner_descriptor.get("type")
-                    inner_label = inner_descriptor.get("label")
-                    
-                    # Détecter les champs cartographiques
-                    if inner_type == "carte":
-                        has_carto_fields = True
-                    
-                    # Ajouter le champ normalisé à la table des blocs répétables
-                    normalized_label = normalize_column_name(inner_label)
-                    column_type = determine_column_type(inner_type, inner_descriptor.get("__typename"))
-                    
-                    if not any(col["id"] == normalized_label for col in repetable_columns):
-                        repetable_columns.append({
-                            "id": normalized_label,
-                            "type": column_type
-                        })
-            
-            # Détecter les champs cartographiques au niveau principal
-            elif champ_type == "carte":
-                has_carto_fields = True
-            
-            # Ajouter le champ normalisé à la table des champs
-            normalized_label = normalize_column_name(champ_label)
-            column_type = determine_column_type(champ_type, descriptor.get("__typename"))
-            
-            if not any(col["id"] == normalized_label for col in champ_columns):
-                champ_columns.append({
-                    "id": normalized_label,
-                    "type": column_type
-                })
-
-    # Traiter les descripteurs d'annotations
-    if demarche_schema.get("activeRevision") and demarche_schema["activeRevision"].get("annotationDescriptors"):
-        for descriptor in demarche_schema["activeRevision"]["annotationDescriptors"]:
-            # Ignorer les types problématiques
-            if descriptor["__typename"] in ["HeaderSectionChampDescriptor", "ExplicationChampDescriptor"] or \
-               descriptor.get("type") in ["header_section", "explication"] or \
-               descriptor.get("id") in problematic_ids:
-                continue
-                
-            champ_type = descriptor.get("type")
-            champ_label = descriptor.get("label")
-            
-            # Pour les annotations, enlever le préfixe "annotation_" pour le nom de colonne
-            if champ_label.startswith("annotation_"):
-                annotation_label = normalize_column_name(champ_label[11:])  # enlever "annotation_"
-            else:
-                annotation_label = normalize_column_name(champ_label)
-            
-            column_type = determine_column_type(champ_type, descriptor.get("__typename"))
-            
-            if not any(col["id"] == annotation_label for col in annotation_columns):
-                annotation_columns.append({
-                    "id": annotation_label,
-                    "type": column_type
-                })
-    
-    # Ajouter les colonnes spécifiques pour les données géographiques
-    if has_carto_fields:
-        geo_columns = [
-            {"id": "geo_id", "type": "Text"},
-            {"id": "geo_source", "type": "Text"},
-            {"id": "geo_description", "type": "Text"},
-            {"id": "geo_type", "type": "Text"},
-            {"id": "geo_coordinates", "type": "Text"},
-            {"id": "geo_wkt", "type": "Text"},
-            {"id": "geo_commune", "type": "Text"},
-            {"id": "geo_numero", "type": "Text"},
-            {"id": "geo_section", "type": "Text"},
-            {"id": "geo_prefixe", "type": "Text"},
-            {"id": "geo_surface", "type": "Numeric"}
-        ]
-        
-        # Ajouter aux blocs répétables s'ils existent
-        if has_repetable_blocks:
-            for geo_col in geo_columns:
-                if not any(col["id"] == geo_col["id"] for col in repetable_columns):
-                    repetable_columns.append(geo_col)
-
-    # Préparer le résultat
-    result = {
-        "dossier": dossier_columns,
-        "champs": champ_columns,
-        "annotations": annotation_columns,
-        "has_repetable_blocks": has_repetable_blocks,
-        "has_carto_fields": has_carto_fields
+    # Variables pour la requête (SIMPLIFIÉES)
+    variables = {
+        "demarcheNumber": demarche_number,
+        "afterCursor": None,
+        **server_filters  # Seulement createdSince
     }
     
-    if has_repetable_blocks:
-        result["repetable_rows"] = repetable_columns
+    headers = {
+        "Authorization": f"Bearer {API_TOKEN}",
+        "Content-Type": "application/json"
+    }
     
-    return result, problematic_ids
-
-def update_grist_tables_from_schema(client, demarche_number, column_types, problematic_ids=None):
-    """
-    Met à jour les tables Grist existantes en fonction du schéma actuel de la démarche,
-    en ajoutant les nouvelles colonnes sans supprimer les données existantes.
-    
-    Args:
-        client: Instance de GristClient
-        demarche_number: Numéro de la démarche
-        column_types: Types de colonnes calculés à partir du schéma
-        problematic_ids: IDs des descripteurs problématiques à filtrer
-        
-    Returns:
-        dict: IDs des tables mises à jour
-    """
-    # IMPORT LOCAL pour éviter la dépendance circulaire
-    from grist_processor_working_all import log, log_verbose, log_error
-    
-    log(f"Mise à jour des tables Grist pour la démarche {demarche_number} d'après le schéma...")
-    
-    try:
-        # Variables de suivi des indicateurs de présence
-        has_repetable_blocks = column_types.get("has_repetable_blocks", False)
-        has_carto_fields = column_types.get("has_carto_fields", False)
-        
-        # FILTRAGE EXPLICITE DES COLONNES PROBLÉMATIQUES
-        # Filtrer les colonnes champs
-        filtered_champ_columns = []
-        for col in column_types.get("champs", []):
-            col_id = col.get("id", "").lower()
-            if any(keyword in col_id for keyword in ["header", "section", "explication", "title"]):
-                log(f"Colonne ignorée car potentiellement un HeaderSectionChamp ou ExplicationChamp: {col_id}")
-                continue
-            filtered_champ_columns.append(col)
-        column_types["champs"] = filtered_champ_columns
-        
-        # Filtrer les colonnes annotations
-        filtered_annotation_columns = []
-        for col in column_types.get("annotations", []):
-            col_id = col.get("id", "").lower()
-            if any(keyword in col_id for keyword in ["header", "section", "explication", "title"]):
-                log(f"Colonne d'annotation ignorée car problématique: {col_id}")
-                continue
-            filtered_annotation_columns.append(col)
-        column_types["annotations"] = filtered_annotation_columns
-        
-        # Définir les IDs de tables
-        dossier_table_id = f"Demarche_{demarche_number}_dossiers"
-        champ_table_id = f"Demarche_{demarche_number}_champs"
-        annotation_table_id = f"Demarche_{demarche_number}_annotations"
-        repetable_table_id = f"Demarche_{demarche_number}_repetable_rows" if has_repetable_blocks else None
-        
-        # Récupérer les tables existantes
-        existing_tables_response = client.list_tables()
-        existing_tables = existing_tables_response.get('tables', [])
-        
-        # Rechercher les tables existantes
-        dossier_table = None
-        champ_table = None
-        annotation_table = None
-        repetable_table = None
-        
-        for table in existing_tables:
-            if isinstance(table, dict):
-                table_id = table.get('id', '').lower()
-                if table_id == dossier_table_id.lower():
-                    dossier_table = table
-                    dossier_table_id = table.get('id')
-                    log(f"Table dossiers existante trouvée avec l'ID {dossier_table_id}")
-                elif table_id == champ_table_id.lower():
-                    champ_table = table
-                    champ_table_id = table.get('id')
-                    log(f"Table champs existante trouvée avec l'ID {champ_table_id}")
-                elif table_id == annotation_table_id.lower():
-                    annotation_table = table
-                    annotation_table_id = table.get('id')
-                    log(f"Table annotations existante trouvée avec l'ID {annotation_table_id}")
-                elif repetable_table_id and table_id == repetable_table_id.lower():
-                    repetable_table = table
-                    repetable_table_id = table.get('id')
-                    log(f"Table répétables existante trouvée avec l'ID {repetable_table_id}")
-        
-        # Fonction pour ajouter les colonnes manquantes à une table
-        def add_missing_columns(table_id, all_columns):
-            if not table_id:
-                return
-                
-            # Récupérer les colonnes existantes
-            url = f"{client.base_url}/docs/{client.doc_id}/tables/{table_id}/columns"
-            response = requests.get(url, headers=client.headers)
-            
-            if response.status_code != 200:
-                log_error(f"Erreur lors de la récupération des colonnes: {response.status_code}")
-                return
-                
-            columns_data = response.json()
-            existing_columns = set()
-            
-            if "columns" in columns_data:
-                for col in columns_data["columns"]:
-                    existing_columns.add(col.get("id"))
-            
-            # Trouver les colonnes manquantes
-            missing_columns = []
-            for col in all_columns:
-                if col["id"] not in existing_columns:
-                    # Filtrage supplémentaire pour les colonnes problématiques
-                    col_id = col["id"].lower()
-                    if any(keyword in col_id for keyword in ["header", "section", "explication", "title"]):
-                        log(f"Colonne ignorée lors de l'ajout: {col_id}")
-                        continue
-                    missing_columns.append(col)
-            
-            # Ajouter les colonnes manquantes
-            if missing_columns:
-                log(f"Ajout de {len(missing_columns)} colonnes manquantes à la table {table_id}")
-                add_url = f"{client.base_url}/docs/{client.doc_id}/tables/{table_id}/columns"
-                add_columns_payload = {"columns": missing_columns}
-                add_response = requests.post(add_url, headers=client.headers, json=add_columns_payload)
-                
-                if add_response.status_code != 200:
-                    log_error(f"Erreur lors de l'ajout des colonnes: {add_response.text}")
-                else:
-                    log(f"Colonnes ajoutées avec succès à la table {table_id}")
-        
-        # Créer la table des dossiers si elle n'existe pas
-        if not dossier_table:
-            log(f"Création de la table {dossier_table_id}")
-            dossier_table_result = client.create_table(dossier_table_id, column_types["dossier"])
-            dossier_table = dossier_table_result['tables'][0]
-            dossier_table_id = dossier_table.get('id')
-        else:
-            # Ajouter les colonnes manquantes à la table des dossiers
-            add_missing_columns(dossier_table_id, column_types["dossier"])
-        
-        # Créer la table des champs si elle n'existe pas
-        if not champ_table:
-            log(f"Création de la table {champ_table_id}")
-            champ_table_result = client.create_table(champ_table_id, column_types["champs"])
-            champ_table = champ_table_result['tables'][0]
-            champ_table_id = champ_table.get('id')
-        else:
-            # Ajouter les colonnes manquantes à la table des champs
-            add_missing_columns(champ_table_id, column_types["champs"])
-        
-        # Créer la table des annotations si elle n'existe pas
-        if not annotation_table:
-            log(f"Création de la table {annotation_table_id}")
-            annotation_table_result = client.create_table(annotation_table_id, column_types["annotations"])
-            annotation_table = annotation_table_result['tables'][0]
-            annotation_table_id = annotation_table.get('id')
-        else:
-            # Ajouter les colonnes manquantes à la table des annotations
-            add_missing_columns(annotation_table_id, column_types["annotations"])
-        
-        # Gérer la table des blocs répétables
-        if has_repetable_blocks and repetable_table_id and "repetable_rows" in column_types:
-            if not repetable_table:
-                log(f"Création de la table {repetable_table_id}")
-                # Commencer avec les colonnes de base pour éviter des erreurs
-                base_columns = [
-                    {"id": "dossier_number", "type": "Int"},
-                    {"id": "block_label", "type": "Text"},
-                    {"id": "block_row_index", "type": "Int"},
-                    {"id": "block_row_id", "type": "Text"}
-                ]
-                repetable_table_result = client.create_table(repetable_table_id, base_columns)
-                repetable_table = repetable_table_result['tables'][0]
-                repetable_table_id = repetable_table.get('id')
-                
-                # Ajouter les colonnes supplémentaires
-                add_missing_columns(repetable_table_id, column_types["repetable_rows"])
-            else:
-                # Ajouter les colonnes manquantes à la table des blocs répétables
-                add_missing_columns(repetable_table_id, column_types["repetable_rows"])
-                
-                # Ajouter des colonnes cartographiques si nécessaire
-                if has_carto_fields:
-                    geo_columns = [
-                        {"id": "geo_id", "type": "Text"},
-                        {"id": "geo_source", "type": "Text"},
-                        {"id": "geo_description", "type": "Text"},
-                        {"id": "geo_type", "type": "Text"},
-                        {"id": "geo_coordinates", "type": "Text"},
-                        {"id": "geo_wkt", "type": "Text"},
-                        {"id": "geo_commune", "type": "Text"},
-                        {"id": "geo_numero", "type": "Text"},
-                        {"id": "geo_section", "type": "Text"},
-                        {"id": "geo_prefixe", "type": "Text"},
-                        {"id": "geo_surface", "type": "Numeric"}
-                    ]
-                    add_missing_columns(repetable_table_id, geo_columns)
-        
-        # Retourner les IDs des tables
-        return {
-            "dossier_table_id": dossier_table_id,
-            "champ_table_id": champ_table_id,
-            "annotation_table_id": annotation_table_id,
-            "repetable_table_id": repetable_table_id
+    # Requête GraphQL MINIMALISTE qui fonctionne
+    query_get_demarche = """
+    query getDemarche(
+        $demarcheNumber: Int!
+        $afterCursor: String = null
+        $createdSince: ISO8601DateTime = null
+    ) {
+        demarche(number: $demarcheNumber) {
+            id
+            number
+            title
+            dossiers(
+                first: 100
+                after: $afterCursor
+                createdSince: $createdSince
+            ) {
+                pageInfo {
+                    hasPreviousPage
+                    hasNextPage
+                    startCursor
+                    endCursor
+                }
+                nodes {
+                    __typename
+                    id
+                    number
+                    archived
+                    prefilled
+                    state
+                    dateDerniereModification
+                    dateDepot
+                    datePassageEnConstruction
+                    datePassageEnInstruction
+                    dateTraitement
+                    usager {
+                        email
+                    }
+                    groupeInstructeur {
+                        id
+                        number
+                        label
+                    }
+                    demandeur {
+                        __typename
+                        ... on PersonnePhysique {
+                            civilite
+                            nom
+                            prenom
+                            email
+                        }
+                        ... on PersonneMorale {
+                            siret
+                            siegeSocial
+                            naf
+                            libelleNaf
+                            entreprise {
+                                siren
+                                raisonSociale
+                                nomCommercial
+                            }
+                        }
+                        ... on PersonneMoraleIncomplete {
+                            siret
+                        }
+                    }
+                    labels {
+                        id 
+                        name
+                        color
+                    }    
+                }
+            }
         }
+    }
+    """
+    
+    # Exécution de la requête
+    print(f"🚀 Exécution requête avec filtres serveur supportés...")
+    
+    response = requests.post(
+        API_URL,
+        json={"query": query_get_demarche, "variables": variables},
+        headers=headers
+    )
+    
+    response.raise_for_status()
+    result = response.json()
+    
+    if "errors" in result:
+        error_messages = [error.get("message", "Unknown error") for error in result["errors"]]
+        print(f"❌ Erreurs GraphQL: {error_messages}")
+        raise Exception(f"GraphQL errors: {', '.join(error_messages)}")
+    
+    # Récupération avec pagination
+    demarche_data = result["data"]["demarche"]
+    dossiers = []
+    
+    if "dossiers" in demarche_data and "nodes" in demarche_data["dossiers"]:
+        dossiers = demarche_data["dossiers"]["nodes"]
+        total_dossiers = len(dossiers)
+        print(f"✅ Première page récupérée: {total_dossiers} dossiers")
         
-    except Exception as e:
-        log_error(f"Erreur lors de la mise à jour des tables Grist: {e}")
-        import traceback
-        traceback.print_exc()
-        raise
+        # Pagination
+        has_next_page = demarche_data["dossiers"]["pageInfo"]["hasNextPage"]
+        cursor = demarche_data["dossiers"]["pageInfo"]["endCursor"]
+        page_num = 1
+        
+        while has_next_page:
+            page_num += 1
+            print(f"📄 Page {page_num}...")
+            
+            variables["afterCursor"] = cursor
+            
+            next_response = requests.post(
+                API_URL,
+                json={"query": query_get_demarche, "variables": variables},
+                headers=headers
+            )
+            
+            next_response.raise_for_status()
+            next_result = next_response.json()
+            
+            if "errors" in next_result:
+                print(f"❌ Erreurs page {page_num}: {next_result['errors']}")
+                break
+            
+            next_demarche = next_result["data"]["demarche"]
+            
+            if "dossiers" in next_demarche and "nodes" in next_demarche["dossiers"]:
+                new_dossiers = next_demarche["dossiers"]["nodes"]
+                dossiers.extend(new_dossiers)
+                total_dossiers += len(new_dossiers)
+                print(f"✅ Page {page_num}: +{len(new_dossiers)} (total: {total_dossiers})")
+                
+                has_next_page = next_demarche["dossiers"]["pageInfo"]["hasNextPage"]
+                cursor = next_demarche["dossiers"]["pageInfo"]["endCursor"]
+            else:
+                has_next_page = False
+    
+    print(f"🎉 Récupération côté serveur: {len(dossiers)} dossiers")
+    
+    # ===========================================
+    # FILTRAGE CÔTÉ CLIENT pour les autres critères
+    # ===========================================
+    
+    if not client_filters:
+        print(f"✅ Aucun filtre côté client - résultat final: {len(dossiers)} dossiers")
+        return dossiers
+    
+    print(f"🔍 Application des filtres côté client...")
+    dossiers_avant = len(dossiers)
+    filtered_dossiers = []
+    
+    for dossier in dossiers:
+        # Filtre par date de fin
+        if client_filters.get('date_fin'):
+            date_fin_str = client_filters['date_fin']
+            if 'T' not in date_fin_str:
+                date_fin_str += 'T23:59:59Z'
+            
+            try:
+                from datetime import datetime
+                date_depot = datetime.fromisoformat(dossier['dateDepot'].replace('Z', '+00:00'))
+                date_limite_fin = datetime.fromisoformat(date_fin_str.replace('Z', '+00:00'))
+                
+                if date_depot > date_limite_fin:
+                    continue
+            except (ValueError, AttributeError, TypeError):
+                continue
+        
+        # Filtre par groupe instructeur
+        if client_filters.get('groupes_instructeurs'):
+            groupes_cibles = client_filters['groupes_instructeurs']
+            groupe_instructeur = dossier.get('groupeInstructeur')
+            
+            if not groupe_instructeur:
+                continue
+                
+            groupe_number = str(groupe_instructeur.get('number', ''))
+            groupe_id = groupe_instructeur.get('id', '')
+            
+            # Vérifier si le groupe correspond
+            if not (groupe_number in groupes_cibles or groupe_id in groupes_cibles):
+                continue
+        
+        # Filtre par statut
+        if client_filters.get('statuts'):
+            statuts_cibles = client_filters['statuts']
+            if dossier.get('state') not in statuts_cibles:
+                continue
+        
+        # Si tous les filtres passent, garder le dossier
+        filtered_dossiers.append(dossier)
+    
+    print(f"✅ Filtrage côté client terminé: {len(filtered_dossiers)}/{dossiers_avant} dossiers conservés")
+    
+    # Debug : Afficher quelques exemples
+    if filtered_dossiers:
+        print(f"📊 Exemples de résultats finaux:")
+        for i, dossier in enumerate(filtered_dossiers[:3]):
+            groupe = dossier.get('groupeInstructeur', {})
+            print(f"   {i+1}. Dossier {dossier['number']}: {dossier['dateDepot'][:10]} - {dossier['state']}")
+            print(f"      Groupe: {groupe.get('number')} ({groupe.get('label', 'Sans label')})")
+    
+    return filtered_dossiers
+
+
+# ================================================
+# SCRIPT DE TEST SIMPLE qui fonctionne
+# ================================================
+
+def test_working_filter():
+    """
+    Test avec SEULEMENT les paramètres qui fonctionnent
+    """
+    print("=== TEST avec seulement createdSince (qui fonctionne) ===")
+    
+    query = """
+    query testWorkingFilter($demarcheNumber: Int!, $createdSince: ISO8601DateTime) {
+        demarche(number: $demarcheNumber) {
+            id
+            title
+            dossiers(first: 5, createdSince: $createdSince) {
+                pageInfo {
+                    hasNextPage
+                    endCursor
+                }
+                nodes {
+                    id
+                    number
+                    dateDepot
+                    state
+                    groupeInstructeur {
+                        id
+                        number
+                        label
+                    }
+                }
+            }
+        }
+    }
+    """
+    
+    variables = {
+        "demarcheNumber": 70018,
+        "createdSince": "2025-06-15T00:00:00Z"
+    }
+    
+    headers = {
+        "Authorization": f"Bearer {API_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    
+    response = requests.post(
+        API_URL,
+        json={"query": query, "variables": variables},
+        headers=headers
+    )
+    
+    if response.status_code == 200:
+        result = response.json()
+        if "errors" in result:
+            print(f"❌ Erreurs: {result['errors']}")
+        else:
+            dossiers = result["data"]["demarche"]["dossiers"]["nodes"]
+            print(f"✅ SUCCESS! {len(dossiers)} dossiers après 2025-06-15")
+            
+            for dossier in dossiers:
+                groupe = dossier['groupeInstructeur']
+                print(f"   📁 {dossier['number']}: {dossier['dateDepot'][:10]} - Groupe {groupe['number']}")
+    else:
+        print(f"❌ Erreur HTTP: {response.status_code}")
+
+
+if __name__ == "__main__":
+    test_working_filter()
+
+
+# ================================================
+# RÉCAPITULATIF des paramètres API réels
+# ================================================
+
+"""
+🔍 PARAMÈTRES GRAPHQL RÉELLEMENT SUPPORTÉS (testé) :
+
+✅ CÔTÉ SERVEUR :
+- createdSince: ISO8601DateTime  # Date de début uniquement
+
+❌ NON SUPPORTÉS côté serveur :
+- createdUntil                   # Date de fin  
+- groupeInstructeurNumber        # Groupe instructeur
+- states                         # Statuts des dossiers
+
+💻 SOLUTION HYBRIDE :
+1. Filtrer par date de début côté serveur (gain majeur)
+2. Filtrer le reste côté client sur le résultat réduit
+
+🎯 PERFORMANCE :
+Au lieu de récupérer 6450 dossiers puis tout filtrer,
+on récupère ~200 dossiers (après 2025-06-15) puis on filtre 
+seulement ceux-là par groupe et statut.
+
+GAIN ESTIMÉ : 30x plus rapide !
+"""
+
+def get_demarche_dossiers(demarche_number: int):
+    """
+    Récupère uniquement la liste des dossiers d'une démarche, avec gestion de la pagination.
+    Récupère tous les dossiers même s'il y en a plus de 100.
+    ANCIENNE VERSION - utilisez get_demarche_dossiers_filtered pour de meilleures performances.
+    """
+    return get_demarche_dossiers_filtered(demarche_number)
+
+def get_dossier_geojson(dossier_number: int) -> Dict[str, Any]:
+    """
+    Récupère les données géométriques d'un dossier au format GeoJSON.
+    """
+    if not API_TOKEN:
+        raise ValueError("Le token d'API n'est pas configuré. Définissez DEMARCHES_API_TOKEN dans le fichier .env")
+    
+    base_url = API_URL.split('/api/')[0] if '/api/' in API_URL else "https://www.demarches-simplifiees.fr"
+    url = f"{base_url}/dossiers/{dossier_number}/geojson"
+    
+    headers = {
+        "Authorization": f"Bearer {API_TOKEN}",
+        "Accept": "application/json"
+    }
+    
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    
+    return response.json()
