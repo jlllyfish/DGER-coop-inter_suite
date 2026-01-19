@@ -2436,14 +2436,19 @@ def process_demarche_for_grist_optimized(client, demarche_number, parallel=True,
                         for record in existing_records:
                             fields = record.get('fields', {})
                             instructeur_id = fields.get('instructeur_id')
-                            if instructeur_id:
-                                existing_map[instructeur_id] = {
+                            groupe_id = fields.get('groupe_instructeur_id')
+                            if instructeur_id and groupe_id:
+                                composite_key = f"{instructeur_id}|{groupe_id}"
+                                existing_map[composite_key] = {
                                     'grist_id': record.get('id'),
                                     'fields': fields
                                 }
                         
                         # Créer un mapping des nouveaux instructeurs
-                        new_map = {r['instructeur_id']: r for r in instructeurs_records}
+                        new_map = {}
+                        for r in instructeurs_records:
+                            composite_key = f"{r['instructeur_id']}|{r['groupe_instructeur_id']}"
+                            new_map[composite_key] = r
                         
                         # Identifier les opérations nécessaires
                         to_delete = []  # Instructeurs qui n'existent plus dans l'API
@@ -2451,15 +2456,15 @@ def process_demarche_for_grist_optimized(client, demarche_number, parallel=True,
                         to_update = []  # Instructeurs existants (on update pour être sûr)
                         
                         # Qui supprimer ?
-                        for instructeur_id, existing_data in existing_map.items():
-                            if instructeur_id not in new_map:
+                        for composite_key, existing_data in existing_map.items():
+                            if composite_key not in new_map:
                                 to_delete.append(existing_data['grist_id'])
                         
                         # Qui créer ou mettre à jour ?
-                        for instructeur_id, new_data in new_map.items():
-                            if instructeur_id in existing_map:
+                        for composite_key, new_data in new_map.items():
+                            if composite_key in existing_map:
                                 # Existe déjà - vérifier si les données ont changé
-                                existing_fields = existing_map[instructeur_id]['fields']
+                                existing_fields = existing_map[composite_key]['fields']
                                 
                                 # Comparer les champs importants
                                 needs_update = False
@@ -2471,7 +2476,7 @@ def process_demarche_for_grist_optimized(client, demarche_number, parallel=True,
                                 
                                 if needs_update:
                                     to_update.append({
-                                        'id': existing_map[instructeur_id]['grist_id'],
+                                        'id': existing_map[composite_key]['grist_id'],
                                         'fields': new_data
                                     })
                             else:
