@@ -129,6 +129,7 @@ def create_demandeurs_pm_columns():
         # Métadonnées
         {"id": "dossier_number", "type": "Int"},
         {"id": "type", "type": "Text"},
+        {"id": "usager_email", "type": "Text"}, 
         # Identifiants de base
         {"id": "siret", "type": "Text"},
         {"id": "siren", "type": "Text"},
@@ -450,7 +451,8 @@ def create_columns_from_schema(demarche_schema, demarche_number=None):
         {"id": "date_derniere_modification_annotations", "type": "DateTime"},
         {"id": "motivation", "type": "Text"},
         {"id": "label_names", "type": "Text"},
-        {"id": "labels_json", "type": "Text"}
+        {"id": "labels_json", "type": "Text"},
+        {"id": "suivi_par", "type": "Text"}, 
     ]
 
     # Colonnes de base pour la table des champs
@@ -528,6 +530,7 @@ def create_columns_from_schema(demarche_schema, demarche_number=None):
                 # Colonnes de base pour ce bloc
                 block_columns = [
                     {"id": "dossier_number", "type": "Int"},
+                    {"id": "block_id", "type": "Text"}, 
                     {"id": "block_row_index", "type": "Int"},
                     {"id": "block_row_id", "type": "Text"},
                 ]
@@ -709,13 +712,85 @@ def create_columns_from_schema(demarche_schema, demarche_number=None):
         for descriptor in demarche_schema["activeRevision"]["annotationDescriptors"]:
             # Ignorer les types problématiques
             if descriptor["__typename"] in ["HeaderSectionChampDescriptor", "ExplicationChampDescriptor"] or \
-               descriptor.get("type") in ["header_section", "explication"] or \
-               descriptor.get("id") in problematic_ids:
+            descriptor.get("type") in ["header_section", "explication"] or \
+            descriptor.get("id") in problematic_ids:
                 continue
                 
             champ_type = descriptor.get("type")
             champ_label = descriptor.get("label")
             
+            # ✅ NOUVEAU : Traitement des blocs répétables dans les annotations
+            if descriptor.get("__typename") == "RepetitionChampDescriptor" and "champDescriptors" in descriptor:
+                has_repetable_blocks = True
+
+                # Préfixe pour les blocs d'annotations
+                block_label = f"annotation_{descriptor.get('label')}"
+                normalized_block_label = normalize_column_name(block_label)
+                
+                # Colonnes de base pour ce bloc
+                block_columns = [
+                    {"id": "dossier_number", "type": "Int"},
+                    {"id": "block_id", "type": "Text"}, 
+                    {"id": "block_row_index", "type": "Int"},
+                    {"id": "block_row_id", "type": "Text"},
+                ]
+                
+                block_has_carto = False
+                
+                # Traiter les sous-champs du bloc répétable
+                for inner_descriptor in descriptor["champDescriptors"]:
+                    inner_type = inner_descriptor.get("type")
+                    inner_label = inner_descriptor.get("label")
+                    
+                    # Détecter les champs cartographiques
+                    if inner_type == "carte":
+                        has_carto_fields = True
+                        block_has_carto = True
+                    
+                    # Ajouter le champ normalisé
+                    normalized_label = normalize_column_name(inner_label)
+                    column_type = determine_column_type(inner_type, inner_descriptor.get("__typename"))
+                    
+                    # Gestion des doublons
+                    base_label = normalized_label
+                    counter = 1
+                    while any(col["id"] == normalized_label for col in block_columns):
+                        normalized_label = f"{base_label}_{counter}"
+                        counter += 1
+                    
+                    block_columns.append({
+                        "id": normalized_label,
+                        "type": column_type
+                    })
+                
+                # Ajouter les colonnes géographiques si nécessaire
+                if block_has_carto:
+                    geo_columns = [
+                        {"id": "geo_id", "type": "Text"},
+                        {"id": "geo_source", "type": "Text"},
+                        {"id": "geo_description", "type": "Text"},
+                        {"id": "geo_type", "type": "Text"},
+                        {"id": "geo_coordinates", "type": "Text"},
+                        {"id": "geo_wkt", "type": "Text"},
+                        {"id": "geo_commune", "type": "Text"},
+                        {"id": "geo_numero", "type": "Text"},
+                        {"id": "geo_section", "type": "Text"},
+                        {"id": "geo_prefixe", "type": "Text"},
+                        {"id": "geo_surface", "type": "Numeric"}
+                    ]
+                    
+                    for geo_col in geo_columns:
+                        if not any(col["id"] == geo_col["id"] for col in block_columns):
+                            block_columns.append(geo_col)
+                
+                # Stocker dans le dict avec le label normalisé comme clé
+                repetable_blocks[normalized_block_label] = {
+                    "original_label": block_label,
+                    "columns": block_columns
+                }
+                continue  # Passer au descripteur suivant
+            
+            # Pour les annotations simples (non répétables)
             # Pour les annotations, enlever le préfixe "annotation_" pour le nom de colonne
             if champ_label.startswith("annotation_"):
                 annotation_label = normalize_column_name(champ_label[11:])  # enlever "annotation_"
@@ -974,6 +1049,31 @@ def update_grist_tables_from_schema(client, demarche_number, column_types, probl
         # Ajouter les blocs répétables si présents
         if has_repetable_blocks:
             result["repetable_blocks"] = repetable_table_ids
+
+        # Créer ou mettre à jour la table Sync_metadata
+        sync_metadata_table_id = "Sync_metadata"
+        sync_metadata_columns = [
+            {"id": "demarche_number", "type": "Int"},
+            {"id": "last_sync_at", "type": "Text"},
+            {"id": "updated_since_cursor", "type": "Text"},
+            {"id": "deleted_since_cursor", "type": "Text"},
+            {"id": "deleted_after_cursor", "type": "Text"},
+            {"id": "last_sync_status", "type": "Text"},
+            {"id": "last_sync_duration", "type": "Numeric"},
+        ]
+        
+        # Recharger la liste des tables pour inclure celles créées pendant cette exécution
+        fresh_tables = client.list_tables()
+        if isinstance(fresh_tables, dict) and 'tables' in fresh_tables:
+            fresh_tables = fresh_tables['tables']
+        sync_table = next((t for t in fresh_tables if t.get('id') == sync_metadata_table_id), None)
+        if not sync_table:
+            log(f"Création de la table {sync_metadata_table_id}")
+            client.create_table(sync_metadata_table_id, sync_metadata_columns)
+        else:
+            add_missing_columns(sync_metadata_table_id, sync_metadata_columns)
+
+        result["sync_metadata"] = sync_metadata_table_id
 
         log(f"Mise à jour des tables terminée avec succès")
         return result
